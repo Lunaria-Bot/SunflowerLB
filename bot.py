@@ -20,6 +20,7 @@ log = logging.getLogger("main-bot")
 # --- Environment variables ---
 TOKEN = os.getenv("DISCORD_TOKEN")
 REDIS_URL = os.getenv("REDIS_URL")
+GUILD_ID = int(os.getenv("GUILD_ID", "0"))
 
 # --- Intents ---
 intents = discord.Intents.default()
@@ -44,6 +45,12 @@ async def init_redis():
 @bot.event
 async def on_ready():
     log.info("🤖 Logged in as %s (%s)", bot.user, bot.user.id)
+    try:
+        guild = discord.Object(id=GUILD_ID)
+        synced = await bot.tree.sync(guild=guild)
+        log.info("✅ Synced %s commands to guild %s", len(synced), guild.id)
+    except Exception as e:
+        log.error("❌ Failed to sync commands: %s", e)
 
 # --- Main entry ---
 async def main():
@@ -53,8 +60,8 @@ async def main():
 
         # Charger les Cogs
         await bot.load_extension("cogs.leaderboard")
-        await bot.load_extension("cogs.cooldowns")
         await bot.load_extension("cogs.leaderboard_admin")
+        await bot.load_extension("cogs.cooldowns")
 
         # Démarrer le bot
         await bot.start(TOKEN)
