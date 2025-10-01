@@ -54,6 +54,7 @@ async def main():
         # Charger les Cogs
         await bot.load_extension("cogs.leaderboard")
         await bot.load_extension("cogs.cooldowns")
+        await bot.load_extension("cogs.leaderboard_admin")
 
         # Démarrer le bot
         await bot.start(TOKEN)
