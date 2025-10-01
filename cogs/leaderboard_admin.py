@@ -20,6 +20,7 @@ class LeaderboardAdmin(commands.Cog):
 
     # --- Reset leaderboard ---
     @app_commands.command(name="lb-reset", description="Reset leaderboard scores (admin)")
+    @app_commands.guilds(discord.Object(id=GUILD_ID))  # ✅ sync immédiat sur ton serveur
     @app_commands.choices(
         category=[
             app_commands.Choice(name="All", value="leaderboard"),
@@ -27,7 +28,6 @@ class LeaderboardAdmin(commands.Cog):
             app_commands.Choice(name="Everything", value="all_keys"),
         ]
     )
-    @app_commands.guilds(discord.Object(id=GUILD_ID))
     @is_admin()
     async def lb_reset(self, interaction: discord.Interaction, category: app_commands.Choice[str]):
         await interaction.response.defer(ephemeral=True)
@@ -47,6 +47,7 @@ class LeaderboardAdmin(commands.Cog):
 
     # --- Pause / Resume leaderboard ---
     @app_commands.command(name="lb-pause", description="Pause or resume leaderboard counting (admin)")
+    @app_commands.guilds(discord.Object(id=GUILD_ID))  # ✅ sync immédiat sur ton serveur
     @app_commands.choices(
         category=[
             app_commands.Choice(name="All", value="all"),
@@ -57,7 +58,6 @@ class LeaderboardAdmin(commands.Cog):
             app_commands.Choice(name="Resume", value="resume"),
         ]
     )
-    @app_commands.guilds(discord.Object(id=GUILD_ID))
     @is_admin()
     async def lb_pause(
         self,
@@ -67,7 +67,6 @@ class LeaderboardAdmin(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True)
 
-        # On stocke l'état dans Redis pour être partagé entre cogs
         key = f"lb:paused:{category.value}"
         if state.value == "pause":
             await self.bot.redis.set(key, "1")
