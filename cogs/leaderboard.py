@@ -13,10 +13,11 @@ MAZOKU_BOT_ID = int(os.getenv("MAZOKU_BOT_ID", "0"))
 
 # --- Points par rareté (Mazoku emoji IDs) ---
 RARITY_POINTS = {
-    "1342202221558763571": 1,   # Common
-    "1342202219574857788": 3,   # Rare
-    "1342202597389373530": 7,   # Super Rare
-    "1342202203515125801": 17   # Ultra Rare
+    "1342202221558763571": 1,    # Common
+    "1342202219574857788": 3,    # Rare
+    "1342202597389373530": 7,    # SR (Super Rare)
+    "1342202212948115510": 14,   # SSR
+    "1342202203515125801": 17    # UR (Ultra Rare)
 }
 EMOJI_REGEX = re.compile(r"<a?:\w+:(\d+)>")
 
@@ -37,8 +38,6 @@ class LeaderboardView(discord.ui.View):
         options=[
             discord.SelectOption(label="All time", value="leaderboard"),
             discord.SelectOption(label="Monthly", value="activity:monthly"),
-            discord.SelectOption(label="AutoSummon", value="activity:autosummon"),
-            discord.SelectOption(label="Summon", value="activity:summon"),
         ]
     )
     async def select_callback(self, interaction: discord.Interaction, select: discord.ui.Select):
@@ -49,7 +48,7 @@ class LeaderboardView(discord.ui.View):
     async def build_leaderboard(self, key: str, guild: discord.Guild, user: discord.Member):
         if not getattr(self.bot, "redis", None):
             return discord.Embed(
-                title=f"🏆 Leaderboard",
+                title="🏆 Leaderboard",
                 description="❌ Redis not connected.",
                 color=discord.Color.red()
             )
@@ -57,7 +56,7 @@ class LeaderboardView(discord.ui.View):
         data = await self.bot.redis.hgetall(key)
         if not data:
             return discord.Embed(
-                title=f"🏆 Leaderboard",
+                title="🏆 Leaderboard",
                 description="Empty",
                 color=discord.Color.gold()
             )
@@ -70,7 +69,7 @@ class LeaderboardView(discord.ui.View):
             lines.append(f"**{i}.** {mention} — {score} pts")
 
         embed = discord.Embed(
-            title=f"🏆 Leaderboard",
+            title="🏆 Leaderboard",
             description="\n".join(lines) if lines else "No entries yet.",
             color=discord.Color.gold()
         )
@@ -86,8 +85,6 @@ class Leaderboard(commands.Cog):
         self.paused = {
             "all": False,
             "monthly": False,
-            "autosummon": False,
-            "summon": False,
         }
         log.info("⚙️ Leaderboard cog loaded with GUILD_ID=%s, MAZOKU_BOT_ID=%s", GUILD_ID, MAZOKU_BOT_ID)
 
@@ -101,7 +98,98 @@ class Leaderboard(commands.Cog):
         embed = await view.build_leaderboard("leaderboard", interaction.guild, interaction.user)
         await interaction.followup.send(embed=embed, view=view, ephemeral=False)
 
-    # --- Listener : détection des claims et attribution de points ---
+    # --- Admin: reset ---
+    @app_commands.command(name="leaderboard-reset", description="Reset scores (admin)")
+    @app_commands.choices(
+        category=[
+            app_commands.Choice(name="All", value="leaderboard"),
+            app_commands.Choice(name="Monthly", value="activity:monthly"),
+            app_commands.Choice(name="Everything", value="all_keys"),
+        ]
+    )
+    @app_commands.guilds(discord.Object(id=GUILD_ID))
+    @is_admin()
+    async def leaderboard_reset(self, interaction: discord.Interaction, category: app_commands.Choice[str]):
+        await interaction.response.defer(ephemeral=True)
+        if not getattr(self.bot, "redis", None):
+            await interaction.followup.send("❌ Redis not connected.", ephemeral=True)
+            return
+
+        if category.value == "all_keys":
+            for key in ["leaderboard", "activity:monthly", "activity:monthly:total"]:
+                await self.bot.redis.delete(key)
+            msg = "🧹 All scores have been reset."
+        else:
+            await self.bot.redis.delete(category.value)
+            msg = f"🧹 Category `{category.value}` has been reset."
+
+        await interaction.followup.send(msg, ephemeral=True)
+
+    # --- Admin: pause/resume ---
+    @app_commands.command(name="leaderboard-pause", description="Pause or resume counters (admin)")
+    @app_commands.choices(
+        category=[
+            app_commands.Choice(name="All", value="all"),
+            app_commands.Choice(name="Monthly", value="monthly"),
+        ],
+        state=[
+            app_commands.Choice(name="Pause", value="pause"),
+            app_commands.Choice(name="Resume", value="resume"),
+        ]
+    )
+    @app_commands.guilds(discord.Object(id=GUILD_ID))
+    @is_admin()
+    async def leaderboard_pause(
+        self,
+        interaction: discord.Interaction,
+        category: app_commands.Choice[str],
+        state: app_commands.Choice[str]
+    ):
+        await interaction.response.defer(ephemeral=True)
+
+        if category.value not in self.paused:
+            await interaction.followup.send(f"❌ Unknown category: {category.value}", ephemeral=True)
+            return
+
+        self.paused[category.value] = (state.value == "pause")
+        log.info("Pause command: category=%s state=%s", category.value, state.value)
+
+        await interaction.followup.send(
+            f"⏸️ `{category.value}` → {'paused' if self.paused[category.value] else 'resumed'}.",
+            ephemeral=True
+        )
+
+    # --- Admin: debug ---
+    @app_commands.command(name="leaderboard-debug", description="View internal stats (admin)")
+    @app_commands.choices(
+        scope=[
+            app_commands.Choice(name="Summary", value="summary"),
+            app_commands.Choice(name="Full detail", value="full"),
+        ]
+    )
+    @app_commands.guilds(discord.Object(id=GUILD_ID))
+    @is_admin()
+    async def leaderboard_debug(self, interaction: discord.Interaction, scope: app_commands.Choice[str]):
+        await interaction.response.defer(ephemeral=True)
+        if not getattr(self.bot, "redis", None):
+            await interaction.followup.send("❌ Redis not connected.", ephemeral=True)
+            return
+
+        total_monthly = await self.bot.redis.get("activity:monthly:total") or 0
+        sizes = {}
+        for key in ["leaderboard", "activity:monthly"]:
+            sizes[key] = await self.bot.redis.hlen(key)
+
+        lines = [
+            f"- **Monthly total**: {total_monthly}",
+            f"- **leaderboard** size: {sizes['leaderboard']}",
+            f"- **activity:monthly** size: {sizes['activity:monthly']}",
+        ]
+
+        msg = "🛠️ Debug:\n" + "\n".join(lines)
+        await interaction.followup.send(msg, ephemeral=True)
+
+    # --- Listener: claims ---
     @commands.Cog.listener()
     async def on_message_edit(self, before: discord.Message, after: discord.Message):
         if after.author.id != MAZOKU_BOT_ID:
@@ -113,23 +201,33 @@ class Leaderboard(commands.Cog):
 
         embed = after.embeds[0]
         title = (embed.title or "").lower()
-        if any(x in title for x in ["card claimed", "auto summon claimed", "summon claimed"]):
-            # Trouver le joueur
+
+        # On ne distingue plus summon/autosummon: on détecte simplement les messages "claimed"
+        if "claimed" in title:
+            # Trouver le joueur mentionné (description, champs, footer)
             match = re.search(r"<@!?(\d+)>", embed.description or "")
+            if not match and embed.fields:
+                for field in embed.fields:
+                    match = re.search(r"<@!?(\d+)>", (field.value or ""))
+                    if match:
+                        break
+            if not match and embed.footer and embed.footer.text:
+                match = re.search(r"<@!?(\d+)>", embed.footer.text)
             if not match:
                 return
+
             user_id = int(match.group(1))
             member = after.guild.get_member(user_id)
             if not member or not getattr(self.bot, "redis", None):
                 return
 
-            # Anti-double comptage
+            # Anti-double comptage (par message & joueur)
             claim_key = f"claim:{after.id}:{user_id}"
             if await self.bot.redis.get(claim_key):
                 return
             await self.bot.redis.set(claim_key, "1", ex=86400)
 
-            # Détection de rareté
+            # Détection de la rareté via les emojis (title/desc/fields/footer)
             rarity_points = 0
             text_to_scan = [embed.title or "", embed.description or ""]
             if embed.fields:
@@ -144,14 +242,25 @@ class Leaderboard(commands.Cog):
                 for emote_id in matches:
                     if emote_id in RARITY_POINTS:
                         rarity_points = RARITY_POINTS[emote_id]
+                        log.debug("Detected rarity emoji %s → %s points", emote_id, rarity_points)
                         break
                 if rarity_points:
                     break
 
-            if rarity_points:
+            if rarity_points <= 0:
+                log.debug("No rarity emoji found in claim embed.")
+                return
+
+            # Incrément des compteurs (avec pause respectée)
+            if not self.paused["all"]:
                 await self.bot.redis.hincrby("leaderboard", str(user_id), rarity_points)
+            if not self.paused["monthly"]:
                 await self.bot.redis.hincrby("activity:monthly", str(user_id), rarity_points)
-                log.info("🏅 %s gained +%s points (%s)", member.display_name, rarity_points, embed.title)
+                await self.bot.redis.incrby("activity:monthly:total", rarity_points)
+
+            # Log
+            new_global = await self.bot.redis.hget("leaderboard", str(user_id)) or "0"
+            log.info("🏅 %s gained +%s points → Global: %s", member.display_name, rarity_points, new_global)
 
 
 # --- Extension setup ---
